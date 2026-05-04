@@ -1,10 +1,14 @@
 package com.ll.framework.ioc;
 
+import com.ll.framework.ioc.annotations.Bean;
+import com.ll.framework.ioc.annotations.Configuration;
 import com.ll.framework.ioc.annotations.Repository;
 import com.ll.framework.ioc.annotations.Service;
 import org.reflections.Reflections;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.*;
 
 public class ApplicationContext {
@@ -13,11 +17,13 @@ public class ApplicationContext {
     private Reflections reflections;
     private Set<Class<?>> repositories;
     private Set<Class<?>> services;
+    private Set<Class<?>> configs;
 
     public ApplicationContext(String basePackage) {
         reflections = new Reflections(basePackage);
         repositories = reflections.getTypesAnnotatedWith(Repository.class);
         services = reflections.getTypesAnnotatedWith(Service.class);
+        configs = reflections.getTypesAnnotatedWith(Configuration.class);
     }
 
     public void init() {
@@ -30,6 +36,12 @@ public class ApplicationContext {
         for (Class<?> clazz : services) {
             createBean(clazz);
             beanNames.put(getBeanName(clazz), clazz);
+        }
+        // Configuration 어노테이션을 가진 클래스들의 빈 생성, 그 후 내부에 @Bean 어노테이션을 가진 메서드들로 빈 생성
+        for (Class<?> clazz : configs) {
+            createBean(clazz);
+            beanNames.put(getBeanName(clazz), clazz);
+            createConfigBean(clazz);
         }
     }
 
@@ -88,16 +100,52 @@ public class ApplicationContext {
             return beans.get(type);
         }
         // 없으면 생성
-        if (repositories.contains(type) || services.contains(type)) {
-            return createBean(type);
-        }
-
-        throw new RuntimeException("No bean for type: " + type);
+//        if (repositories.contains(type) || services.contains(type)) {
+//            return createBean(type);
+//        }
+//
+//        throw new RuntimeException("No bean for type: " + type);
+        return createBean(type);
     }
 
     // 빈 이름(String)으로 빈 클래스 얻기
     private String getBeanName(Class<?> clazz) {
         String name = clazz.getSimpleName();
         return Character.toLowerCase(name.charAt(0)) + name.substring(1);
+    }
+
+    private void createConfigBean(Class<?> clazz) {
+        Method[] methods = clazz.getDeclaredMethods();
+        for (Method method : methods) {
+            // @Bean 어노테이션을 가진 메서드들로 빈 생성
+            if (method.isAnnotationPresent(Bean.class)) {
+                createBeanByMethod(method, clazz);
+                String methodName = method.getName();
+                beanNames.put(methodName, method.getReturnType());
+            }
+        }
+    }
+
+    // 메서드를 통해 빈 생성
+    private Object createBeanByMethod(Method method, Class<?> clazz) {
+        // 이미 있으면 반환
+        if (beans.containsKey(method.getReturnType())) {
+            return beans.get(method.getReturnType());
+        }
+        // 메서드 실행 후 반환값을 빈으로 등록
+        try {
+            Class<?>[] paramTypes = method.getParameterTypes();
+            Object[] params = new Object[paramTypes.length];
+
+            for (int i = 0; i < paramTypes.length; i++) {
+                params[i] = getBeanByType(paramTypes[i]);
+            }
+
+            Object instance = method.invoke(getBeanByType(clazz), params);
+            beans.put(instance.getClass(), instance);
+            return instance;
+        } catch (InvocationTargetException | IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
     }
 }
